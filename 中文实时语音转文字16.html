@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>中文实时语音转文字</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #121212;
+            color: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            color: #00e676;
+            text-shadow: 0 0 5px rgba(0, 230, 118, 0.5);
+        }
+        #controls {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            background-color: #a5d6a7;
+            color: #004d40;
+            cursor: pointer;
+            border-radius: 5px;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        button:focus {
+            outline: none;
+        }
+        button:hover {
+            background-color: #81c784;
+        }
+        button.active {
+            background-color: #66bb6a;
+        }
+        #transcript {
+            width: 80%;
+            height: 300px;
+            overflow-y: auto;
+            background-color: #1e1e1e;
+            padding: 10px;
+            border: 1px solid #00e676;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 230, 118, 0.3);
+            white-space: pre-wrap;
+            margin-bottom: 20px;
+        }
+        .timestamp {
+            color: #4fc3f7;
+        }
+        .italic {
+            font-style: italic;
+            color: #888;
+        }
+        #recorder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        #recorder img {
+            width: 100px;
+        }
+        #timer {
+            font-size: 18px;
+            color: #00e676;
+        }
+        #notice {
+            color: #4fc3f7;
+            text-align: center;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>中文实时语音转文字</h1>
+    <div id="recorder">
+        <img src="https://img.icons8.com/ios-filled/100/00e676/microphone.png" alt="录音机图像">
+        <div id="timer">00:00</div>
+    </div>
+    <div id="controls">
+        <button id="startButton" onclick="startRecording()">开始记录</button>
+        <button id="pauseResumeButton" onclick="pauseResumeRecording()">暂停/继续记录</button>
+        <button id="stopButton" onclick="stopRecording()">停止记录</button>
+        <button id="saveButton" onclick="saveTranscript()">保存记录</button>
+    </div>
+    <div id="transcript"></div>
+    <div id="notice">温馨提示：1.请允许麦克风的使用权限。2.在长时会议记录过程中，建议定时保存，并及时备份文件。&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;制作人：命运的必然</div>
+    
+    <script>
+        let isRecording = false;
+        let recognition;
+        let mediaRecorder;
+        let audioChunks = [];
+        let transcriptElement = document.getElementById('transcript');
+        let finalTranscript = '';
+        let interimTranscript = '';
+        let timer;
+        let startTime;
+        let elapsedTime = 0;
+        let timerElement = document.getElementById('timer');
+        let interimElement;
+        let activeButton = null;
+
+        function updateTimer() {
+            const now = Date.now();
+            const diff = now - startTime + elapsedTime;
+            const minutes = Math.floor(diff / 60000).toString().padStart(2, '0');
+            const seconds = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
+            timerElement.textContent = `${minutes}:${seconds}`;
+        }
+
+        function setActiveButton(button) {
+            if (activeButton) {
+                activeButton.classList.remove('active');
+            }
+            button.classList.add('active');
+            activeButton = button;
+        }
+
+        function setFavicon(color) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 16;
+            canvas.height = 16;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = color;
+            ctx.fillRect(0, 0, 16, 16);
+            const link = document.createElement('link');
+            link.rel = 'icon';
+            link.href = canvas.toDataURL();
+            const oldLink = document.querySelector('link[rel="icon"]');
+            if (oldLink) {
+                document.head.removeChild(oldLink);
+            }
+            document.head.appendChild(link);
+        }
+
+        function startRecording() {
+            if (!isRecording) {
+                if (!recognition) {
+                    recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+                    recognition.continuous = true;
+                    recognition.interimResults = true;
+                    recognition.lang = 'zh-CN';
+                    
+                    recognition.onresult = (event) => {
+                        let newTranscript = '';
+                        for (let i = event.resultIndex; i < event.results.length; ++i) {
+                            if (event.results[i].isFinal) {
+                                const timeStamp = timerElement.textContent;
+                                newTranscript += `<span class="timestamp">[${timeStamp}] </span>${event.results[i][0].transcript}\n`;
+                                finalTranscript += event.results[i][0].transcript + '\n';
+                                if (interimElement) {
+                                    transcriptElement.removeChild(interimElement);
+                                    interimElement = null;
+                                }
+                            } else {
+                                interimTranscript = event.results[i][0].transcript;
+                                updateTranscript('', interimTranscript);
+                            }
+                        }
+                        updateTranscript(newTranscript, '');
+                    };
+
+                    recognition.onerror = (event) => {
+                        console.error('Speech recognition error detected: ' + event.error);
+                    };
+                }
+
+                navigator.mediaDevices.getUserMedia({ audio: true })
+                    .then(stream => {
+                        if (!mediaRecorder) {
+                            mediaRecorder = new MediaRecorder(stream);
+                            mediaRecorder.ondataavailable = event => {
+                                audioChunks.push(event.data);
+                            };
+                        }
+                        mediaRecorder.start();
+
+                        startTime = Date.now();
+                        timer = setInterval(updateTimer, 1000);
+
+                        recognition.start();
+                        isRecording = true;
+                        setActiveButton(document.getElementById('startButton'));
+                        setFavicon('orange');
+                    })
+                    .catch(error => console.error('获取音频流失败', error));
+            }
+        }
+
+        function pauseResumeRecording() {
+            if (isRecording) {
+                recognition.stop();
+                mediaRecorder.stop();
+                clearInterval(timer);
+                elapsedTime += Date.now() - startTime;
+                isRecording = false;
+                setActiveButton(document.getElementById('pauseResumeButton'));
+                setFavicon('lightgray');
+            } else {
+                mediaRecorder.start();
+                recognition.start();
+
+                startTime = Date.now();
+                timer = setInterval(updateTimer, 1000);
+                
+                isRecording = true;
+                setActiveButton(document.getElementById('pauseResumeButton'));
+                setFavicon('orange');
+            }
+        }
+
+        function stopRecording() {
+            if (isRecording) {
+                recognition.stop();
+                mediaRecorder.stop();
+                clearInterval(timer);
+                elapsedTime += Date.now() - startTime;
+                isRecording = false;
+                setActiveButton(document.getElementById('stopButton'));
+                setFavicon('lightgray');
+            }
+        }
+
+        function updateTranscript(newTranscript, interimTranscript) {
+            if (newTranscript) {
+                transcriptElement.innerHTML += newTranscript;
+            }
+            if (interimTranscript) {
+                if (!interimElement) {
+                    interimElement = document.createElement('span');
+                    interimElement.className = 'italic';
+                    transcriptElement.appendChild(interimElement);
+                }
+                interimElement.textContent = interimTranscript;
+            }
+            transcriptElement.scrollTop = transcriptElement.scrollHeight;
+        }
+
+        function saveTranscript() {
+            // 保存文字记录
+            const text = transcriptElement.innerText;
+            const blobText = new Blob([text], { type: 'text/plain' });
+            const urlText = URL.createObjectURL(blobText);
+            const aText = document.createElement('a');
+            aText.href = urlText;
+            aText.download = `语音转文字_${new Date().toLocaleString().replace(/:/g, '-')}.txt`;
+            document.body.appendChild(aText);
+            aText.click();
+            document.body.removeChild(aText);
+
+            // 保存音频记录
+            const blobAudio = new Blob(audioChunks, { type: 'audio/webm' });
+            const urlAudio = URL.createObjectURL(blobAudio);
+            const aAudio = document.createElement('a');
+            aAudio.href = urlAudio;
+            aAudio.download = `语音转文字_${new Date().toLocaleString().replace(/:/g, '-')}.webm`;
+            document.body.appendChild(aAudio);
+            aAudio.click();
+            document.body.removeChild(aAudio);
+
+            // 重置音频数据
+            audioChunks = [];
+        }
+    </script>
+</body>
+</html>
